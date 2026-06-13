@@ -19,6 +19,7 @@ if (!IsValidYouTubeUrl(url))
 
 var youtube = new YoutubeClient();
 string? tempPath = null;
+string? thumbPath = null;
 
 try
 {
@@ -35,6 +36,9 @@ try
     Console.WriteLine($"Título:    {title}");
     Console.WriteLine($"Duração:   {duration}");
     Console.WriteLine($"Canal:     {author}");
+    Console.WriteLine("--- Tags MP3 ---");
+    Console.WriteLine($"Title:     {title}");
+    Console.WriteLine($"Artist:    {author}");
     Console.WriteLine("---");
     Console.Write("Baixar e converter para MP3? [s/N]: ");
 
@@ -94,17 +98,53 @@ try
     Console.WriteLine($"\r  100,0%  [{sw.Elapsed:mm\\:ss}]  ");
 
     Console.WriteLine();
+    Console.WriteLine("Baixando thumbnail...");
+
+    try
+    {
+        var thumbUrl = $"https://i.ytimg.com/vi/{video.Id.Value}/hqdefault.jpg";
+        var tempThumb = Path.Combine(Path.GetTempPath(), $"convertor_thumb_{Guid.NewGuid():N}.jpg");
+        using var http = new HttpClient();
+        var thumbData = await http.GetByteArrayAsync(thumbUrl);
+        await File.WriteAllBytesAsync(tempThumb, thumbData);
+        thumbPath = tempThumb;
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"  Aviso: thumbnail indisponível ({ex.GetType().Name}). Conversão sem cover art.");
+    }
+
+    Console.WriteLine();
     Console.WriteLine("Convertendo para MP3 (192k CBR)...");
 
-    await FFMpegArguments
-        .FromFileInput(tempPath)
-        .OutputToFile(outputPath, overwrite: true, options => options
-            .WithAudioCodec(AudioCodec.LibMp3Lame)
-            .WithAudioBitrate(192))
-        .ProcessAsynchronously();
+    if (thumbPath is not null)
+    {
+        await FFMpegArguments
+            .FromFileInput(tempPath)
+            .AddFileInput(thumbPath)
+            .OutputToFile(outputPath, overwrite: true, options => options
+                .WithAudioCodec(AudioCodec.LibMp3Lame)
+                .WithAudioBitrate(192)
+                .WithCustomArgument("-map 0:a -map 1:v -disposition:v attached_pic -c:v copy -id3v2_version 3")
+                .WithCustomArgument($"-metadata title=\"{EscapeMeta(title)}\"")
+                .WithCustomArgument($"-metadata artist=\"{EscapeMeta(author)}\""))
+            .ProcessAsynchronously();
+    }
+    else
+    {
+        await FFMpegArguments
+            .FromFileInput(tempPath)
+            .OutputToFile(outputPath, overwrite: true, options => options
+                .WithAudioCodec(AudioCodec.LibMp3Lame)
+                .WithAudioBitrate(192)
+                .WithCustomArgument($"-metadata title=\"{EscapeMeta(title)}\"")
+                .WithCustomArgument($"-metadata artist=\"{EscapeMeta(author)}\""))
+            .ProcessAsynchronously();
+    }
 
     File.Delete(tempPath);
     tempPath = null;
+    if (thumbPath is not null) { File.Delete(thumbPath); thumbPath = null; }
 
     var sizeMb = new FileInfo(outputPath).Length / 1024.0 / 1024.0;
     Console.WriteLine();
@@ -116,6 +156,7 @@ catch (Exception ex)
     Console.Error.WriteLine();
     Console.Error.WriteLine($"Erro: {ex.Message}");
     if (tempPath is not null && File.Exists(tempPath)) File.Delete(tempPath);
+    if (thumbPath is not null && File.Exists(thumbPath)) File.Delete(thumbPath);
     return 1;
 }
 
@@ -142,3 +183,6 @@ static string SanitizeFileName(string name)
     var clean = string.Concat(name.Select(c => invalid.Contains(c) ? '_' : c)).Trim();
     return string.IsNullOrWhiteSpace(clean) ? "output" : clean;
 }
+
+static string EscapeMeta(string value) =>
+    value.Replace("\\", "\\\\").Replace("\"", "\\\"");
