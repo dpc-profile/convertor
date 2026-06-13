@@ -4,21 +4,27 @@
 
 - **Runtime:** .NET 10 (`net10.0`)
 - **Pacotes NuGet:**
-  - `YoutubeExplode` — extração de metadados + stream de áudio
-  - `FFMpegCore` — wrapper .NET para `ffmpeg` (conversão → MP3)
+  - `YoutubeExplode` 6.6.0 — extração de metadados + stream de áudio
+  - `FFMpegCore` 5.1.0 — wrapper .NET para `ffmpeg` (conversão → MP3)
 - **Dependência externa:** `ffmpeg` no PATH do sistema
 
 ## Estrutura
 
 ```
 convertor/
-├── Convertor.csproj
-├── Program.cs
-└── docs/
-    └── spec.md
+├── Convertor.slnx                ← solution (formato .slnx, não .sln)
+├── Convertor.App/                ← project
+│   ├── Convertor.App.csproj
+│   └── Program.cs                ← 144 linhas, arquivo único
+├── publish_linux.sh              ← script p/ publish single-file
+├── docs/
+│   └── spec.md
+├── README.md
+├── AGENTS.md
+└── .gitignore
 ```
 
-`Program.cs` em arquivo único (~80 linhas). Sem divisão em serviços — overengineering para este escopo.
+`Program.cs` em arquivo único. Sem divisão em serviços — overengineering para este escopo.
 
 ## Fluxo
 
@@ -34,33 +40,34 @@ convertor/
 3. **Preview no CLI**
 
    ```
-   ┌─ Preview ─────────────────────
-   │ Título:    {title}
-   │ Duração:   {duration:hh\:mm\:ss}
-   │ Canal:     {author}
-   └───────────────────────────────
+   --- Preview ---
+   Título:    {title}
+   Duração:   {duration:hh\:mm\:ss}
+   Canal:     {author}
+   ---
    Baixar e converter para MP3? [s/N]:
    ```
 
-   - `Console.ReadKey()` → `Y/y` aceita, qualquer outra cancela
-   - Cancelamento → `Console.WriteLine("Operação cancelada.")` + exit
+   - `Console.ReadKey()` → `s/S` aceita, qualquer outra cancela
+   - Cancelamento → `Console.WriteLine("Operação cancelada.")` + exit 0
 
 4. **Download do stream de áudio**
    - `Videos.Streams.GetManifestAsync(url)` → `StreamManifest`
    - Selecionar melhor stream de áudio: `manifest.GetAudioOnlyStreams().OrderByDescending(s => s.Bitrate).First()`
-   - Download para arquivo temporário: `temp_{guid}.m4a`
-   - `progress.OnPercentageChanged` → imprimir progresso na mesma linha (`\r` + clear)
+   - Download para arquivo temporário: `Path.Combine(Path.GetTempPath(), $"convertor_{Guid.NewGuid():N}.{audioStream.Container.Name}")` (extensão dinâmica do container)
+   - Progresso via `Progress<double>` (IProgress pattern) → imprimir progresso na mesma linha (`\r` + clear)
 
 5. **Conversão para MP3**
    - `FFMpegArguments`
      - `.FromFileInput(tempPath)`
-     - `.OutputToFile(outputPath, true, o => o.WithAudioCodec(AudioCodec.LibMp3Lame))`
-     - `.ProcessSynchronously()`
-   - Bitrate MP3: V0 VBR (padrão LAME via libmp3lame) ou 192k se preferir arquivo menor — **escolha: 192k CBR** (bom equilíbrio tamanho/qualidade)
+     - `.OutputToFile(outputPath, true, o => o.WithAudioCodec(AudioCodec.LibMp3Lame).WithAudioBitrate(192))`
+     - `.ProcessAsynchronously()`
+   - **MP3 192k CBR** (libmp3lame) — equilíbrio tamanho/qualidade
 
 6. **Finalização**
    - Deletar arquivo temporário
-   - `Console.WriteLine($"✓ Salvo em: {outputPath}")`
+   - Output path: `Path.Combine(GetOutputDir(), $"{safeTitle}.mp3")` — `~/Downloads` se existir, senão `cwd`
+   - `Console.WriteLine($"✓ Salvo: {Path.GetFullPath(outputPath)} ({sizeMb:F2} MB)")`
    - Exit code 0
 
 ## Tratamento de erros
@@ -72,21 +79,23 @@ convertor/
 | Arquivo de saída já existe | Perguntar sobrescrever `[s/N]` |
 | Caracteres inválidos no título | Sanitizar (`Path.GetInvalidFileNameChars` → `_`) |
 | Download/conversão falha | Mensagem com inner exception + exit 1 |
+| `~/Downloads` inválido | Fallback p/ `Directory.GetCurrentDirectory()` |
 
 ## Comandos
 
 ```bash
-# Setup
-cd /mnt/Steins_Gate/executaveis_liberados/Projetos/dotenete/convertor
-dotnet new console --framework net10.0 --force
-dotnet add package YoutubeExplode
-dotnet add package FFMpegCore
+# Build
+dotnet build Convertor.App -c Release
 
-# Run
-dotnet run
+# Run (modo dev)
+dotnet run --project Convertor.App -c Release
 
-# Build release
-dotnet publish -c Release -o publish
+# Publish single-file (via script)
+./publish_linux.sh
+
+# Publish single-file (manual)
+dotnet publish Convertor.App -c Release -r linux-x64 --self-contained -o publish \
+  -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true
 ```
 
 ## Limitações conhecidas
