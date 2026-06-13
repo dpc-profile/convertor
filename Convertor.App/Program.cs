@@ -1,4 +1,7 @@
 using System.Diagnostics;
+using System.Globalization;
+using System.Text;
+using System.Text.RegularExpressions;
 using FFMpegCore;
 using FFMpegCore.Enums;
 using YoutubeExplode;
@@ -31,13 +34,48 @@ try
     var author = video.Author.ChannelTitle;
     var duration = video.Duration?.ToString(@"hh\:mm\:ss") ?? "desconhecida";
 
+    var cleanedTitle = CleanTitle(title);
+    string finalTitle;
+
+    if (title == cleanedTitle)
+    {
+        finalTitle = title;
+    }
+    else
+    {
+        Console.WriteLine();
+        Console.WriteLine("--- Opções de Título ---");
+        Console.WriteLine($"Original: {title}");
+        Console.WriteLine($"Limpo:    {cleanedTitle}");
+        Console.WriteLine("[1] Original");
+        Console.WriteLine("[2] Limpo (símbolos removidos)");
+        Console.WriteLine("[3] Editar manualmente");
+        Console.Write("Escolha [1-3] (padrão: 2): ");
+        var choice = Console.ReadLine()?.Trim();
+
+        if (choice == "1")
+        {
+            finalTitle = title;
+        }
+        else if (choice == "3")
+        {
+            Console.Write("Título personalizado: ");
+            var custom = Console.ReadLine()?.Trim();
+            finalTitle = string.IsNullOrWhiteSpace(custom) ? cleanedTitle : custom;
+        }
+        else
+        {
+            finalTitle = cleanedTitle;
+        }
+    }
+
     Console.WriteLine();
     Console.WriteLine("--- Preview ---");
-    Console.WriteLine($"Título:    {title}");
+    Console.WriteLine($"Título:    {finalTitle}");
     Console.WriteLine($"Duração:   {duration}");
     Console.WriteLine($"Canal:     {author}");
     Console.WriteLine("--- Tags MP3 ---");
-    Console.WriteLine($"Title:     {title}");
+    Console.WriteLine($"Title:     {finalTitle}");
     Console.WriteLine($"Artist:    {author}");
     Console.WriteLine("---");
     Console.Write("Baixar e converter para MP3? [s/N]: ");
@@ -64,7 +102,7 @@ try
         return 1;
     }
 
-    var safeTitle = SanitizeFileName(title);
+    var safeTitle = SanitizeFileName(finalTitle);
     var outputPath = Path.Combine(GetOutputDir(), $"{safeTitle}.mp3");
     tempPath = Path.Combine(Path.GetTempPath(), $"convertor_{Guid.NewGuid():N}.{audioStream.Container.Name}");
 
@@ -126,7 +164,7 @@ try
                 .WithAudioCodec(AudioCodec.LibMp3Lame)
                 .WithAudioBitrate(192)
                 .WithCustomArgument("-map 0:a -map 1:v -disposition:v attached_pic -c:v copy -id3v2_version 3")
-                .WithCustomArgument($"-metadata title=\"{EscapeMeta(title)}\"")
+                .WithCustomArgument($"-metadata title=\"{EscapeMeta(finalTitle)}\"")
                 .WithCustomArgument($"-metadata artist=\"{EscapeMeta(author)}\""))
             .ProcessAsynchronously();
     }
@@ -137,7 +175,7 @@ try
             .OutputToFile(outputPath, overwrite: true, options => options
                 .WithAudioCodec(AudioCodec.LibMp3Lame)
                 .WithAudioBitrate(192)
-                .WithCustomArgument($"-metadata title=\"{EscapeMeta(title)}\"")
+                .WithCustomArgument($"-metadata title=\"{EscapeMeta(finalTitle)}\"")
                 .WithCustomArgument($"-metadata artist=\"{EscapeMeta(author)}\""))
             .ProcessAsynchronously();
     }
@@ -177,11 +215,27 @@ static string GetOutputDir()
     return Directory.Exists(downloads) ? downloads : Directory.GetCurrentDirectory();
 }
 
+static string CleanTitle(string title)
+{
+    var allowed = new HashSet<char> { ' ', '-', '_', '&', '\'', ',', '.', '!', '?', ':', ';', '/' };
+    var clean = string.Concat(title.Where(c => char.IsLetterOrDigit(c) || allowed.Contains(c)));
+    var collapsed = Regex.Replace(clean, @"\s+", " ").Trim();
+    return string.IsNullOrWhiteSpace(collapsed) ? "Unknown Title" : collapsed;
+}
+
 static string SanitizeFileName(string name)
 {
-    var invalid = Path.GetInvalidFileNameChars();
-    var clean = string.Concat(name.Select(c => invalid.Contains(c) ? '_' : c)).Trim();
-    return string.IsNullOrWhiteSpace(clean) ? "output" : clean;
+    var normalized = name.Normalize(NormalizationForm.FormD);
+    var sb = new StringBuilder();
+    foreach (var c in normalized)
+    {
+        if (char.IsLetterOrDigit(c))
+            sb.Append(c);
+        else if (char.GetUnicodeCategory(c) == UnicodeCategory.SpaceSeparator)
+            sb.Append(' ');
+    }
+    var collapsed = Regex.Replace(sb.ToString().Normalize(NormalizationForm.FormC), @"\s+", " ").Trim();
+    return string.IsNullOrWhiteSpace(collapsed) ? "output" : collapsed;
 }
 
 static string EscapeMeta(string value) =>
