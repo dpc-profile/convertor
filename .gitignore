@@ -3,6 +3,9 @@
 ##
 ## Get latest from `dotnet new gitignore`
 
+# Especifico projeto
+*.mp3
+
 # dotenv files
 .env
 
@@ -12,7 +15,6 @@
 *.user
 *.userosscache
 *.sln.docstates
-*.mp3
 
 # User-specific files (MonoDevelop/Xamarin Studio)
 *.userprefs

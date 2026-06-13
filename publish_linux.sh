@@ -3,7 +3,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
-dotnet publish Convertor \
+dotnet publish Convertor.App \
   -c Release \
   -r linux-x64 \
   --self-contained \
