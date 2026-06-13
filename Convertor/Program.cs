@@ -61,7 +61,7 @@ try
     }
 
     var safeTitle = SanitizeFileName(title);
-    var outputPath = $"{safeTitle}.mp3";
+    var outputPath = Path.Combine(GetOutputDir(), $"{safeTitle}.mp3");
     tempPath = Path.Combine(Path.GetTempPath(), $"convertor_{Guid.NewGuid():N}.{audioStream.Container.Name}");
 
     if (File.Exists(outputPath))
@@ -126,6 +126,14 @@ static bool IsValidYouTubeUrl(string? url)
     if (uri.Scheme is not ("http" or "https")) return false;
     return uri.Host.Contains("youtube.com", StringComparison.OrdinalIgnoreCase) ||
            uri.Host.Contains("youtu.be", StringComparison.OrdinalIgnoreCase);
+}
+
+static string GetOutputDir()
+{
+    var downloads = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+        "Downloads");
+    return Directory.Exists(downloads) ? downloads : Directory.GetCurrentDirectory();
 }
 
 static string SanitizeFileName(string name)
