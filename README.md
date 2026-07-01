@@ -53,6 +53,7 @@ dotnet publish Convertor.App -c Release -r linux-x64 \
 | Runtime | .NET 10 |
 | YouTube API | YoutubeExplode 6.6.0 |
 | Conversão | FFMpegCore 5.1.0 + ffmpeg |
+| TUI | Spectre.Console 0.49.x |
 | Formato | MP3 192k CBR |
 
 ## Projeto
@@ -60,8 +61,9 @@ dotnet publish Convertor.App -c Release -r linux-x64 \
 ```
 convertor/
 ├── Convertor.slnx
-├── Convertor.App/
+├── Convertor.Core/          ← lógica pura (YouTube + ffmpeg)
+├── Convertor.App/           ← TUI Spectre.Console
 ├── docs/
-├── publish_linux.sh
+├── compile_on_linux.sh
 └── AGENTS.md
 ```

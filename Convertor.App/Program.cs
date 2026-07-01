@@ -1,242 +1,140 @@
-using System.Diagnostics;
-using System.Globalization;
-using System.Text;
-using System.Text.RegularExpressions;
-using FFMpegCore;
-using FFMpegCore.Enums;
-using YoutubeExplode;
-using YoutubeExplode.Videos.Streams;
+using Convertor.Core.Models;
+using Convertor.Core.Services;
+using Spectre.Console;
 
 Console.OutputEncoding = System.Text.Encoding.UTF8;
-Console.WriteLine("=== YouTube → MP3 Convertor ===");
-Console.WriteLine();
 
-Console.Write("URL: ");
-var url = Console.ReadLine()?.Trim();
+AnsiConsole.Write(new FigletText("Convertor").Centered().Color(Color.Yellow));
+AnsiConsole.Write(new Rule("[yellow]YouTube → MP3[/]") { Justification = Justify.Left });
 
-if (!IsValidYouTubeUrl(url))
-{
-    Console.Error.WriteLine("URL inválida. Fornece uma URL válida do YouTube.");
-    return 1;
-}
+var service = new YouTubeService();
 
-var youtube = new YoutubeClient();
+var url = AnsiConsole.Prompt(
+    new TextPrompt<string>("URL: ")
+        .PromptStyle("yellow")
+        .Validate(u => YouTubeService.IsValidUrl(u)
+            ? ValidationResult.Success()
+            : ValidationResult.Error("URL inválida. Fornece uma URL válida do YouTube.")));
+
 string? tempPath = null;
 string? thumbPath = null;
 
 try
 {
-    Console.WriteLine();
-    Console.WriteLine("Buscando metadados...");
+    var metadata = await AnsiConsole.Status()
+        .Spinner(Spinner.Known.Dots)
+        .StartAsync("Buscando metadados...", async _ =>
+            await service.GetMetadataAsync(url));
 
-    var video = await youtube.Videos.GetAsync(url!);
-    var title = video.Title;
-    var author = video.Author.ChannelTitle;
-    var duration = video.Duration?.ToString(@"hh\:mm\:ss") ?? "desconhecida";
-
-    var cleanedTitle = CleanTitle(title);
     string finalTitle;
-
-    if (title == cleanedTitle)
+    if (metadata.Title == metadata.CleanedTitle)
     {
-        finalTitle = title;
+        finalTitle = metadata.Title;
     }
     else
     {
-        Console.WriteLine();
-        Console.WriteLine("--- Opções de Título ---");
-        Console.WriteLine($"Original: {title}");
-        Console.WriteLine($"Limpo:    {cleanedTitle}");
-        Console.WriteLine("[1] Original");
-        Console.WriteLine("[2] Limpo (símbolos removidos)");
-        Console.WriteLine("[3] Editar manualmente");
-        Console.Write("Escolha [1-3] (padrão: 2): ");
-        var choice = Console.ReadLine()?.Trim();
+        AnsiConsole.Write(new Rule("[yellow]Opções de Título[/]") { Justification = Justify.Left });
+        AnsiConsole.MarkupLine($"Original: [cyan]{metadata.Title}[/]");
+        AnsiConsole.MarkupLine($"Limpo:    [cyan]{metadata.CleanedTitle}[/]");
 
-        if (choice == "1")
+        var choice = AnsiConsole.Prompt(
+            new SelectionPrompt<string>()
+                .Title("Escolha o título:")
+                .AddChoices("Limpo (símbolos removidos)", "Original", "Editar manualmente"));
+
+        finalTitle = choice switch
         {
-            finalTitle = title;
-        }
-        else if (choice == "3")
-        {
-            Console.Write("Título personalizado: ");
-            var custom = Console.ReadLine()?.Trim();
-            finalTitle = string.IsNullOrWhiteSpace(custom) ? cleanedTitle : custom;
-        }
-        else
-        {
-            finalTitle = cleanedTitle;
-        }
+            "Original" => metadata.Title,
+            "Editar manualmente" => GetCustomTitle(metadata.CleanedTitle),
+            _ => metadata.CleanedTitle
+        };
     }
 
-    Console.WriteLine();
-    Console.WriteLine("--- Preview ---");
-    Console.WriteLine($"Título:    {finalTitle}");
-    Console.WriteLine($"Duração:   {duration}");
-    Console.WriteLine($"Canal:     {author}");
-    Console.WriteLine("--- Tags MP3 ---");
-    Console.WriteLine($"Title:     {finalTitle}");
-    Console.WriteLine($"Artist:    {author}");
-    Console.WriteLine("---");
-    Console.Write("Baixar e converter para MP3? [s/N]: ");
+    AnsiConsole.Write(new Rule("[yellow]Preview[/]") { Justification = Justify.Left });
+    var table = new Table().RoundedBorder();
+    table.AddColumn("Propriedade");
+    table.AddColumn("Valor");
+    table.AddRow("Título", finalTitle);
+    table.AddRow("Duração", metadata.DurationFormatted);
+    table.AddRow("Canal", metadata.Author);
+    AnsiConsole.Write(table);
 
-    var key = Console.ReadKey();
-    Console.WriteLine();
-    if (key.KeyChar != 's' && key.KeyChar != 'S')
+    if (!AnsiConsole.Confirm("Baixar e converter para MP3?", defaultValue: false))
     {
-        Console.WriteLine("Operação cancelada.");
+        AnsiConsole.MarkupLine("[yellow]Operação cancelada.[/]");
         return 0;
     }
 
-    Console.WriteLine();
-    Console.WriteLine("Resolvendo streams de áudio...");
-    var manifest = await youtube.Videos.Streams.GetManifestAsync(url!);
+    var audioSource = await AnsiConsole.Status()
+        .Spinner(Spinner.Known.Dots)
+        .StartAsync("Resolvendo streams de áudio...", async _ =>
+            await service.GetBestAudioAsync(url));
 
-    var audioStream = manifest.GetAudioOnlyStreams()
-        .OrderByDescending(s => s.Bitrate)
-        .FirstOrDefault();
-
-    if (audioStream is null)
-    {
-        Console.Error.WriteLine("Nenhum stream de áudio encontrado neste vídeo.");
-        return 1;
-    }
-
-    var safeTitle = SanitizeFileName(finalTitle);
-    var outputPath = Path.Combine(GetOutputDir(), $"{safeTitle}.mp3");
-    tempPath = Path.Combine(Path.GetTempPath(), $"convertor_{Guid.NewGuid():N}.{audioStream.Container.Name}");
+    var safeTitle = YouTubeService.SanitizeFileName(finalTitle);
+    var outputPath = Path.Combine(YouTubeService.GetOutputDirectory(), $"{safeTitle}.mp3");
+    tempPath = Path.Combine(Path.GetTempPath(), $"convertor_{Guid.NewGuid():N}.{audioSource.Container}");
 
     if (File.Exists(outputPath))
     {
-        Console.Write($"Arquivo '{outputPath}' já existe. Sobrescrever? [s/N]: ");
-        var ow = Console.ReadKey();
-        Console.WriteLine();
-        if (ow.KeyChar != 's' && ow.KeyChar != 'S')
+        if (!AnsiConsole.Confirm($"Arquivo '[yellow]{outputPath}[/]' já existe. Sobrescrever?", defaultValue: false))
         {
-            Console.WriteLine("Operação cancelada.");
+            AnsiConsole.MarkupLine("[yellow]Operação cancelada.[/]");
             return 0;
         }
     }
 
-    Console.WriteLine();
-    Console.WriteLine($"Baixando: {title}");
-    Console.WriteLine($"Stream:   {audioStream.Container.Name} @ {audioStream.Bitrate.BitsPerSecond / 1000}kbps");
+    AnsiConsole.MarkupLine($"Baixando: [cyan]{metadata.Title}[/]");
+    AnsiConsole.MarkupLine($"Stream:   [cyan]{audioSource.Container}[/] @ [cyan]{audioSource.BitrateBps / 1000}kbps[/]");
 
-    var sw = Stopwatch.StartNew();
-    var progressLock = new object();
-    var progress = new Progress<double>(p =>
-    {
-        lock (progressLock)
+    await AnsiConsole.Progress()
+        .Columns(new ProgressColumn[]
         {
-            Console.Write($"\r  {p,6:P1}  [{sw.Elapsed:mm\\:ss}]  ");
-        }
-    });
+            new TaskDescriptionColumn(),
+            new ProgressBarColumn(),
+            new PercentageColumn(),
+            new RemainingTimeColumn(),
+            new ElapsedTimeColumn(),
+        })
+        .StartAsync(async ctx =>
+        {
+            var task = ctx.AddTask("Baixando", maxValue: 100);
+            var progress = new Progress<double>(p => task.Value = p * 100);
+            await service.DownloadAudioAsync(audioSource, tempPath, progress);
+        });
 
-    await youtube.Videos.Streams.DownloadAsync(audioStream, tempPath, progress);
-    Console.WriteLine($"\r  100,0%  [{sw.Elapsed:mm\\:ss}]  ");
+    thumbPath = await AnsiConsole.Status()
+        .Spinner(Spinner.Known.Dots)
+        .StartAsync("Baixando thumbnail...", async _ =>
+            await service.DownloadThumbnailAsync(metadata.VideoId));
 
-    Console.WriteLine();
-    Console.WriteLine("Baixando thumbnail...");
-
-    try
+    if (thumbPath is null)
     {
-        var thumbUrl = $"https://i.ytimg.com/vi/{video.Id.Value}/hqdefault.jpg";
-        var tempThumb = Path.Combine(Path.GetTempPath(), $"convertor_thumb_{Guid.NewGuid():N}.jpg");
-        using var http = new HttpClient();
-        var thumbData = await http.GetByteArrayAsync(thumbUrl);
-        await File.WriteAllBytesAsync(tempThumb, thumbData);
-        thumbPath = tempThumb;
-    }
-    catch (Exception ex)
-    {
-        Console.WriteLine($"  Aviso: thumbnail indisponível ({ex.GetType().Name}). Conversão sem cover art.");
+        AnsiConsole.MarkupLine("[yellow]Aviso:[/] thumbnail indisponível. Conversão sem cover art.");
     }
 
-    Console.WriteLine();
-    Console.WriteLine("Convertendo para MP3 (192k CBR)...");
-
-    if (thumbPath is not null)
-    {
-        await FFMpegArguments
-            .FromFileInput(tempPath)
-            .AddFileInput(thumbPath)
-            .OutputToFile(outputPath, overwrite: true, options => options
-                .WithAudioCodec(AudioCodec.LibMp3Lame)
-                .WithAudioBitrate(192)
-                .WithCustomArgument("-map 0:a -map 1:v -disposition:v attached_pic -c:v copy -id3v2_version 3")
-                .WithCustomArgument($"-metadata title=\"{EscapeMeta(finalTitle)}\"")
-                .WithCustomArgument($"-metadata artist=\"{EscapeMeta(author)}\""))
-            .ProcessAsynchronously();
-    }
-    else
-    {
-        await FFMpegArguments
-            .FromFileInput(tempPath)
-            .OutputToFile(outputPath, overwrite: true, options => options
-                .WithAudioCodec(AudioCodec.LibMp3Lame)
-                .WithAudioBitrate(192)
-                .WithCustomArgument($"-metadata title=\"{EscapeMeta(finalTitle)}\"")
-                .WithCustomArgument($"-metadata artist=\"{EscapeMeta(author)}\""))
-            .ProcessAsynchronously();
-    }
+    await AnsiConsole.Status()
+        .Spinner(Spinner.Known.Dots)
+        .StartAsync("Convertendo para MP3 (192k CBR)...", async _ =>
+            await service.ConvertToMp3Async(tempPath, thumbPath, outputPath, finalTitle, metadata.Author));
 
     File.Delete(tempPath);
     tempPath = null;
     if (thumbPath is not null) { File.Delete(thumbPath); thumbPath = null; }
 
     var sizeMb = new FileInfo(outputPath).Length / 1024.0 / 1024.0;
-    Console.WriteLine();
-    Console.WriteLine($"✓ Salvo: {Path.GetFullPath(outputPath)} ({sizeMb:F2} MB)");
+    AnsiConsole.MarkupLine($"[green]✓ Salvo:[/] {Path.GetFullPath(outputPath)} ([cyan]{sizeMb:F2} MB[/])");
     return 0;
 }
 catch (Exception ex)
 {
-    Console.Error.WriteLine();
-    Console.Error.WriteLine($"Erro: {ex.Message}");
+    AnsiConsole.WriteException(ex, ExceptionFormats.ShortenPaths);
     if (tempPath is not null && File.Exists(tempPath)) File.Delete(tempPath);
     if (thumbPath is not null && File.Exists(thumbPath)) File.Delete(thumbPath);
     return 1;
 }
 
-static bool IsValidYouTubeUrl(string? url)
+static string GetCustomTitle(string fallback)
 {
-    if (string.IsNullOrWhiteSpace(url)) return false;
-    if (!Uri.TryCreate(url, UriKind.Absolute, out var uri)) return false;
-    if (uri.Scheme is not ("http" or "https")) return false;
-    return uri.Host.Contains("youtube.com", StringComparison.OrdinalIgnoreCase) ||
-           uri.Host.Contains("youtu.be", StringComparison.OrdinalIgnoreCase);
+    var custom = AnsiConsole.Ask<string?>("Título personalizado:");
+    return string.IsNullOrWhiteSpace(custom) ? fallback : custom;
 }
-
-static string GetOutputDir()
-{
-    var downloads = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-        "Downloads");
-    return Directory.Exists(downloads) ? downloads : Directory.GetCurrentDirectory();
-}
-
-static string CleanTitle(string title)
-{
-    var allowed = new HashSet<char> { ' ', '-', '_', '&', '\'', ',', '.', '!', '?', ':', ';', '/' };
-    var clean = string.Concat(title.Where(c => char.IsLetterOrDigit(c) || allowed.Contains(c)));
-    var collapsed = Regex.Replace(clean, @"\s+", " ").Trim();
-    return string.IsNullOrWhiteSpace(collapsed) ? "Unknown Title" : collapsed;
-}
-
-static string SanitizeFileName(string name)
-{
-    var normalized = name.Normalize(NormalizationForm.FormD);
-    var sb = new StringBuilder();
-    foreach (var c in normalized)
-    {
-        if (char.IsLetterOrDigit(c))
-            sb.Append(c);
-        else if (char.GetUnicodeCategory(c) == UnicodeCategory.SpaceSeparator)
-            sb.Append(' ');
-    }
-    var collapsed = Regex.Replace(sb.ToString().Normalize(NormalizationForm.FormC), @"\s+", " ").Trim();
-    return string.IsNullOrWhiteSpace(collapsed) ? "output" : collapsed;
-}
-
-static string EscapeMeta(string value) =>
-    value.Replace("\\", "\\\\").Replace("\"", "\\\"");

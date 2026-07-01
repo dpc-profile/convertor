@@ -9,8 +9,11 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="YoutubeExplode" Version="6.6.0" />
-    <PackageReference Include="FFMpegCore" Version="5.1.0" />
+    <PackageReference Include="Spectre.Console" Version="0.57.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Convertor.Core\Convertor.Core.csproj" />
   </ItemGroup>
 
 </Project>
